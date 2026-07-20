@@ -22,9 +22,30 @@ use tagger::TaggerEngine;
 use types::{ActiveInput, AppState, FilePickerEntry, LyricFile, MusicFile, Screen};
 use ui::UI;
 
-/// Bulletproof TermuxBackend wrapper for Android / Termux compatibility.
-/// Intercepts and squelches Android kernel/libc IO errors like OS Error 34 (`ERANGE` / "Math result not representable")
-/// during ioctl(TIOCGWINSZ) and termios calls.
+/// Direct libc raw mode initialization for Android / Termux.
+/// Guarantees ECHO, ICANON, and ISIG flags are stripped so Ctrl+P and Arrow keys
+/// send raw events instead of echoing ^P or raw escape codes to the terminal.
+fn enable_termux_raw_mode() -> io::Result<()> {
+    unsafe {
+        let mut termios_setup: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(libc::STDIN_FILENO, &mut termios_setup) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        let mut raw = termios_setup;
+        raw.c_iflag &= !(libc::BRKINT | libc::ICRNL | libc::INPCK | libc::ISTRIP | libc::IXON);
+        raw.c_oflag &= !(libc::OPOST);
+        raw.c_cflag |= libc::CS8;
+        raw.c_lflag &= !(libc::ECHO | libc::ICANON | libc::IEXTEN | libc::ISIG);
+
+        if libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+/// Custom TermuxBackend wrapper to squelch Termux PTY driver errors
 pub struct TermuxBackend<W: Write> {
     inner: CrosstermBackend<W>,
 }
@@ -130,7 +151,8 @@ fn cleanup_terminal() {
 }
 
 fn run() -> io::Result<()> {
-    let _ = enable_raw_mode();
+    // Enable raw mode using libc first, fallback to crossterm
+    let _ = enable_termux_raw_mode().or_else(|_| enable_raw_mode());
     let mut stdout = io::stdout();
     let _ = execute!(stdout, EnterAlternateScreen, EnableMouseCapture);
 
@@ -243,12 +265,18 @@ fn handle_mouse_click(_col: u16, row: u16, state: &mut AppState) {
 }
 
 fn handle_setup_input(code: KeyCode, modifiers: KeyModifiers, state: &mut AppState) -> bool {
-    if code == KeyCode::Char('p') && modifiers.contains(KeyModifiers::CONTROL) {
+    // Handle Ctrl+P or ASCII Control character 16 (\x10)
+    if (code == KeyCode::Char('p') && modifiers.contains(KeyModifiers::CONTROL))
+        || code == KeyCode::Char('\x10')
+    {
         open_file_picker(state);
         return false;
     }
 
-    if code == KeyCode::Char('u') && modifiers.contains(KeyModifiers::CONTROL) {
+    // Handle Ctrl+U or ASCII Control character 21 (\x15)
+    if (code == KeyCode::Char('u') && modifiers.contains(KeyModifiers::CONTROL))
+        || code == KeyCode::Char('\x15')
+    {
         match state.active_input {
             ActiveInput::MusicPath => state.music_path_input.clear(),
             ActiveInput::LyricsPath => state.lyrics_path_input.clear(),
@@ -262,7 +290,7 @@ fn handle_setup_input(code: KeyCode, modifiers: KeyModifiers, state: &mut AppSta
         KeyCode::Esc => {
             return true;
         }
-        KeyCode::Tab => {
+        KeyCode::Tab | KeyCode::Down | KeyCode::Right => {
             state.active_input = match state.active_input {
                 ActiveInput::MusicPath => ActiveInput::LyricsPath,
                 ActiveInput::LyricsPath => ActiveInput::OutputPath,
@@ -270,7 +298,7 @@ fn handle_setup_input(code: KeyCode, modifiers: KeyModifiers, state: &mut AppSta
                 ActiveInput::Threshold => ActiveInput::MusicPath,
             };
         }
-        KeyCode::BackTab => {
+        KeyCode::BackTab | KeyCode::Up | KeyCode::Left => {
             state.active_input = match state.active_input {
                 ActiveInput::MusicPath => ActiveInput::Threshold,
                 ActiveInput::LyricsPath => ActiveInput::MusicPath,
@@ -279,6 +307,10 @@ fn handle_setup_input(code: KeyCode, modifiers: KeyModifiers, state: &mut AppSta
             };
         }
         KeyCode::Char(c) => {
+            // Squelch unprintable control chars
+            if (c as u32) < 32 && c != '\t' {
+                return false;
+            }
             state.error_msg = None;
             match state.active_input {
                 ActiveInput::MusicPath => state.music_path_input.push(c),

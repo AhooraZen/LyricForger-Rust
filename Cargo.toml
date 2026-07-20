@@ -1,6 +1,6 @@
 [package]
 name = "lyric_forger"
-version = "1.6.0"
+version = "1.7.0"
 edition = "2021"
 authors = ["AhooraZen"]
 description = "A clean, modern Android Termux TUI utility to smartly match and embed lyrics into music files."
@@ -10,7 +10,8 @@ repository = "https://github.com/AhooraZen/LyricForger-Rust"
 
 [dependencies]
 ratatui = "0.28"
-crossterm = "0.28"
+crossterm = { version = "0.28.1", features = ["event-stream"] }
+libc = "0.2"
 id3 = "1.14"
 metaflac = "0.2"
 strsim = "0.11"
