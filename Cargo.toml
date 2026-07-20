@@ -1,6 +1,6 @@
 [package]
 name = "lyric_forger"
-version = "1.4.0"
+version = "1.5.0"
 edition = "2021"
 authors = ["AhooraZen"]
 description = "A clean, modern Android Termux TUI utility to smartly match and embed lyrics into music files."

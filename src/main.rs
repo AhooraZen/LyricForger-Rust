@@ -13,7 +13,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{backend::CrosstermBackend, layout::{Position, Size}, Terminal};
 use walkdir::WalkDir;
 use zip::ZipArchive;
 
@@ -22,44 +22,99 @@ use tagger::TaggerEngine;
 use types::{ActiveInput, AppState, FilePickerEntry, LyricFile, MusicFile, Screen};
 use ui::UI;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Register panic hook to guarantee terminal raw mode & mouse tracking are restored even on unexpected errors
+/// Custom Backend wrapper for Termux / Android compatibility.
+/// Catches OS Error 34 (`ERANGE` / "Math result not representable") from ioctl(TIOCGWINSZ)
+/// and falls back gracefully to environment $COLUMNS/$LINES or 80x24 bounds.
+pub struct TermuxBackend<W: Write> {
+    inner: CrosstermBackend<W>,
+}
+
+impl<W: Write> TermuxBackend<W> {
+    pub fn new(writer: W) -> Self {
+        Self {
+            inner: CrosstermBackend::new(writer),
+        }
+    }
+}
+
+impl<W: Write> ratatui::backend::Backend for TermuxBackend<W> {
+    fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
+    where
+        I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    {
+        self.inner.draw(content)
+    }
+
+    fn hide_cursor(&mut self) -> io::Result<()> {
+        self.inner.hide_cursor()
+    }
+
+    fn show_cursor(&mut self) -> io::Result<()> {
+        self.inner.show_cursor()
+    }
+
+    fn get_cursor_position(&mut self) -> io::Result<Position> {
+        self.inner.get_cursor_position().or_else(|_| Ok(Position::new(0, 0)))
+    }
+
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
+        self.inner.set_cursor_position(position)
+    }
+
+    fn clear(&mut self) -> io::Result<()> {
+        self.inner.clear()
+    }
+
+    fn size(&self) -> io::Result<Size> {
+        match self.inner.size() {
+            Ok(size) => Ok(size),
+            Err(_) => {
+                let cols = std::env::var("COLUMNS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(80);
+                let lines = std::env::var("LINES")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(24);
+                Ok(Size::new(cols, lines))
+            }
+        }
+    }
+
+    fn window_size(&mut self) -> io::Result<ratatui::backend::WindowSize> {
+        self.inner.window_size().or_else(|_| {
+            let cols = std::env::var("COLUMNS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(80);
+            let lines = std::env::var("LINES")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(24);
+            Ok(ratatui::backend::WindowSize {
+                columns_rows: Size::new(cols, lines),
+                pixels: Size::new(0, 0),
+            })
+        })
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        ratatui::backend::Backend::flush(&mut self.inner)
+    }
+}
+
+fn main() {
     let default_panic = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         cleanup_terminal();
         default_panic(panic_info);
     }));
 
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    let mut state = AppState::default();
-
-    // Auto-detect sample zip files if present
-    if Path::new("sample_music.zip").exists() {
-        state.music_path_input = String::from("sample_music.zip");
+    if let Err(err) = run() {
+        cleanup_terminal();
+        eprintln!("Lyric Forger Run Error: {}", err);
     }
-    if Path::new("sample_lyrics.zip").exists() {
-        state.lyrics_path_input = String::from("sample_lyrics.zip");
-    }
-
-    let res = run_app(&mut terminal, &mut state);
-
-    // Always clean up terminal mode cleanly on normal exit
-    cleanup_terminal();
-
-    if let Some(ref temp_path) = state.temp_dir {
-        let _ = fs::remove_dir_all(temp_path);
-    }
-
-    if let Err(err) = res {
-        println!("Lyric Forger Error: {:?}", err);
-    }
-
-    Ok(())
 }
 
 fn cleanup_terminal() {
@@ -72,6 +127,34 @@ fn cleanup_terminal() {
         crossterm::cursor::Show
     );
     let _ = stdout.flush();
+}
+
+fn run() -> io::Result<()> {
+    let _ = enable_raw_mode();
+    let mut stdout = io::stdout();
+    let _ = execute!(stdout, EnterAlternateScreen, EnableMouseCapture);
+
+    let backend = TermuxBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut state = AppState::default();
+
+    if Path::new("sample_music.zip").exists() {
+        state.music_path_input = String::from("sample_music.zip");
+    }
+    if Path::new("sample_lyrics.zip").exists() {
+        state.lyrics_path_input = String::from("sample_lyrics.zip");
+    }
+
+    let res = run_app(&mut terminal, &mut state);
+
+    cleanup_terminal();
+
+    if let Some(ref temp_path) = state.temp_dir {
+        let _ = fs::remove_dir_all(temp_path);
+    }
+
+    res
 }
 
 fn run_app<B: ratatui::backend::Backend>(
@@ -90,50 +173,52 @@ fn run_app<B: ratatui::backend::Backend>(
             continue;
         }
 
-        if event::poll(Duration::from_millis(100))? {
-            match event::read()? {
-                Event::Key(key) => {
-                    // Global Ctrl+C handler
-                    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                        return Ok(());
-                    }
-
-                    if state.show_file_picker {
-                        handle_file_picker_input(key.code, state);
-                        continue;
-                    }
-
-                    if state.show_help_modal {
-                        if key.code == KeyCode::Esc || key.code == KeyCode::F(1) {
-                            state.show_help_modal = false;
+        let poll_res = event::poll(Duration::from_millis(100));
+        if let Ok(true) = poll_res {
+            if let Ok(ev) = event::read() {
+                match ev {
+                    Event::Key(key) => {
+                        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                            return Ok(());
                         }
-                        continue;
+
+                        if state.show_file_picker {
+                            handle_file_picker_input(key.code, state);
+                            continue;
+                        }
+
+                        if state.show_help_modal {
+                            if key.code == KeyCode::Esc || key.code == KeyCode::F(1) {
+                                state.show_help_modal = false;
+                            }
+                            continue;
+                        }
+
+                        if key.code == KeyCode::F(1) {
+                            state.show_help_modal = true;
+                            continue;
+                        }
+
+                        let should_quit = match state.current_screen {
+                            Screen::Setup => handle_setup_input(key.code, key.modifiers, state),
+                            Screen::Analysis => handle_analysis_input(key.code, state),
+                            Screen::Forging => false,
+                            Screen::Summary => handle_summary_input(key.code, state),
+                        };
+
+                        if should_quit {
+                            return Ok(());
+                        }
                     }
 
-                    if key.code == KeyCode::F(1) {
-                        state.show_help_modal = true;
-                        continue;
+                    Event::Mouse(mouse) => {
+                        if mouse.kind == MouseEventKind::Down(crossterm::event::MouseButton::Left) {
+                            handle_mouse_click(mouse.column, mouse.row, state);
+                        }
                     }
 
-                    let should_quit = match state.current_screen {
-                        Screen::Setup => handle_setup_input(key.code, key.modifiers, state),
-                        Screen::Analysis => handle_analysis_input(key.code, state),
-                        Screen::Forging => false,
-                        Screen::Summary => handle_summary_input(key.code, state),
-                    };
-
-                    if should_quit {
-                        return Ok(());
-                    }
+                    _ => {}
                 }
-
-                Event::Mouse(mouse) => {
-                    if mouse.kind == MouseEventKind::Down(crossterm::event::MouseButton::Left) {
-                        handle_mouse_click(mouse.column, mouse.row, state);
-                    }
-                }
-
-                _ => {}
             }
         }
     }
@@ -145,14 +230,13 @@ fn handle_mouse_click(_col: u16, row: u16, state: &mut AppState) {
     }
 
     if state.current_screen == Screen::Setup {
-        // Map touch taps on Termux screen to input field focus & keyboard trigger!
         if (3..=5).contains(&row) {
             state.active_input = ActiveInput::MusicPath;
         } else if (6..=8).contains(&row) {
             state.active_input = ActiveInput::LyricsPath;
         } else if (9..=10).contains(&row) {
             state.active_input = ActiveInput::OutputPath;
-        } else if row >= 11 && row <= 12 {
+        } else if (11..=12).contains(&row) {
             state.active_input = ActiveInput::Threshold;
         }
     }
@@ -176,7 +260,7 @@ fn handle_setup_input(code: KeyCode, modifiers: KeyModifiers, state: &mut AppSta
 
     match code {
         KeyCode::Esc => {
-            return true; // Signal clean exit back to main()!
+            return true;
         }
         KeyCode::Tab => {
             state.active_input = match state.active_input {
