@@ -15,7 +15,35 @@
 
 ---
 
-## ✨ Key Features
+## 🇮🇷 راهنمای فارسی (Persian Documentation)
+
+### ⚡ درباره برنامه
+
+**LyricForger-Rust** یک ابزار ترمینالی (TUI) بسار سریع و هوشمند است که برای اندروید (Termux) و لینوکس طراحی شده است. این ابزار فایل‌های زیپ حاوی موزیک را با فایل‌های زیپ حاوی متن ترانه (`.lrc` یا `.txt`) دریافت کرده، با ۳ الگوریتم هوشمند آن‌ها را با هم جفت می‌کند و سپس متن ترانه‌ها را مستقیماً داخل متادیتای فایل‌های صوتی تزریق می‌کند تا توسط موزیک پلیرهایی مثل **Samsung Music** قابل شناسایی و نمایش باشد.
+
+### ✨ ویژگی‌های کلیدی
+- 📱 **بهینه‌شده برای Termux و اندروید:** سازگار با کیبوردهای لمسی و صفحات کوچک ترمینال.
+- 🎵 **پشتیبانی کامل از Samsung Music و موزیک پلیرهای اندروید:** تزریق فریم استاندارد `USLT` در فایل‌های MP3 و تگ‌های Vorbis (`LYRICS`) در فایل‌های FLAC.
+- 📦 **پشتیبانی از فایل زیپ و پوشه:** استخراج و پردازش مستقیم فایل‌های `.zip` بدون نیاز به آنزیپ دستی.
+- ⚡ **سرعت بسیار بالا:** توسعه‌یافته با زبان راشت (Rust) و فریم‌ورک [Ratatui](https://github.com/ratatui/ratatui).
+- 🎯 **موتور تطبیق ۳ لایه هوشمند:** پیدا کردن لیریکس مرتبط حتی در صورت تفاوت نام فایل‌ها.
+
+### 🧠 الگوریتم‌های تطبیق هوشمند
+1. **الگوریتم اول — 🎯 مطابقت دقیق پس از پاکسازی (Clean Exact Match):** حذف شماره ترک‌ها (مثل `01 - `)، حذف کلمات اضافی (مثل `[Official Audio]` یا `(Lyrics)`)، و یکسان‌سازی فاصله‌ها و حروف.
+2. **الگوریتم دوم — 🏷️ مطابقت تگ متادیتا با هدر LRC:** مقایسه تگ‌های داخلی فایل صوتی (`Title` و `Artist`) با هدرهای داخل فایل لیریکس (`[ti:]` و `[ar:]`).
+3. **الگوریتم سوم — 🔤 مطابقت فازی و تشابه کلمات (Fuzzy Distance):** محاسبه میزان شباهت متنی بر اساس الگوریتم‌های Levenshtein و Jaro-Winkler برای جفت‌سازی فایل‌هایی با غلط‌های املایی جزئی.
+
+### 🚀 نحوه نصب و اجرا در ترموکس (Termux)
+```bash
+pkg update && pkg install -y rust git
+git clone https://github.com/AhooraZen/LyricForger-Rust.git
+cd LyricForger-Rust
+cargo run --release
+```
+
+---
+
+## ✨ English Features
 
 - 📱 **Designed for Termux & Android:** Native support for small touch screens, keyboard controls, and Android MediaScanner.
 - 🎵 **Samsung Music & Android Native Compatibility:** Embeds standard ID3v2 `USLT` (*Unsynchronised lyric/text information*) frames into MP3s and Vorbis `LYRICS` comments into FLAC files.
