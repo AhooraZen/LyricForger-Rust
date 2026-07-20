@@ -19,11 +19,11 @@ jobs:
       matrix:
         include:
           - target: aarch64-linux-android
-            arch: arm64-v8a
+            api_clang: aarch64-linux-android24-clang
           - target: armv7-linux-androideabi
-            arch: armeabi-v7a
+            api_clang: armv7a-linux-androideabi24-clang
           - target: x86_64-linux-android
-            arch: x86_64
+            api_clang: x86_64-linux-android24-clang
 
     steps:
       - name: Checkout Code
@@ -34,20 +34,22 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Setup Android NDK Environment
+      - name: Build Standalone Android Executable Binary
         run: |
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> $GITHUB_ENV
+          NDK_BIN="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          CLANG_PATH="$NDK_BIN/${{ matrix.api_clang }}"
+          
+          TARGET_ENV=$(echo "${{ matrix.target }}" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+          
+          export "CC_${TARGET_ENV}=$CLANG_PATH"
+          export "CARGO_TARGET_${TARGET_ENV}_LINKER=$CLANG_PATH"
 
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk
-
-      - name: Build Android Binary with Cargo NDK
-        run: cargo ndk -t ${{ matrix.arch }} -o ./dist build --release
+          cargo build --target ${{ matrix.target }} --release
 
       - name: Prepare Binary Artifact
         run: |
           mkdir -p ./release_bins
-          cp ./dist/${{ matrix.arch }}/lyric_forger ./release_bins/lyric_forger-${{ matrix.target }}
+          cp ./target/${{ matrix.target }}/release/lyric_forger ./release_bins/lyric_forger-${{ matrix.target }}
 
       - name: Upload Binary Artifact
         uses: actions/upload-artifact@v4
@@ -75,7 +77,7 @@ jobs:
         with:
           path: ./downloaded_artifacts
 
-      - name: Organize Release Binaries
+      - name: Organize Release Assets
         run: |
           cp ./downloaded_artifacts/lyric_forger-aarch64-linux-android/lyric_forger-aarch64-linux-android ./release_assets/
           cp ./downloaded_artifacts/lyric_forger-armv7-linux-androideabi/lyric_forger-armv7-linux-androideabi ./release_assets/
@@ -100,9 +102,9 @@ jobs:
           tag_name: ${{ env.TAG_NAME }}
           name: "LyricForger-Rust Release (${{ env.TAG_NAME }}) ⚡"
           body: |
-            ## ⚡ Pre-compiled Android Binaries & Source Archive
+            ## ⚡ Pre-compiled Standalone Android Binaries & Source Archive
 
-            ### 📱 Android Executables Included:
+            ### 📱 Standalone Android Executables Included:
             - **`lyric_forger-aarch64-linux-android`**: ARM 64-bit (Termux & modern Android 64-bit devices)
             - **`lyric_forger-armv7-linux-androideabi`**: ARM 32-bit (Older Android 10 / 32-bit devices)
             - **`lyric_forger-x86_64-linux-android`**: x86_64 (Android emulators & x86 devices)
