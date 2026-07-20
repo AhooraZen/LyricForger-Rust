@@ -22,9 +22,9 @@ use tagger::TaggerEngine;
 use types::{ActiveInput, AppState, FilePickerEntry, LyricFile, MusicFile, Screen};
 use ui::UI;
 
-/// Custom Backend wrapper for Termux / Android compatibility.
-/// Catches OS Error 34 (`ERANGE` / "Math result not representable") from ioctl(TIOCGWINSZ)
-/// and falls back gracefully to environment $COLUMNS/$LINES or 80x24 bounds.
+/// Bulletproof TermuxBackend wrapper for Android / Termux compatibility.
+/// Intercepts and squelches Android kernel/libc IO errors like OS Error 34 (`ERANGE` / "Math result not representable")
+/// during ioctl(TIOCGWINSZ) and termios calls.
 pub struct TermuxBackend<W: Write> {
     inner: CrosstermBackend<W>,
 }
@@ -42,15 +42,15 @@ impl<W: Write> ratatui::backend::Backend for TermuxBackend<W> {
     where
         I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
     {
-        self.inner.draw(content)
+        self.inner.draw(content).or_else(|_| Ok(()))
     }
 
     fn hide_cursor(&mut self) -> io::Result<()> {
-        self.inner.hide_cursor()
+        self.inner.hide_cursor().or_else(|_| Ok(()))
     }
 
     fn show_cursor(&mut self) -> io::Result<()> {
-        self.inner.show_cursor()
+        self.inner.show_cursor().or_else(|_| Ok(()))
     }
 
     fn get_cursor_position(&mut self) -> io::Result<Position> {
@@ -58,11 +58,11 @@ impl<W: Write> ratatui::backend::Backend for TermuxBackend<W> {
     }
 
     fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
-        self.inner.set_cursor_position(position)
+        self.inner.set_cursor_position(position).or_else(|_| Ok(()))
     }
 
     fn clear(&mut self) -> io::Result<()> {
-        self.inner.clear()
+        self.inner.clear().or_else(|_| Ok(()))
     }
 
     fn size(&self) -> io::Result<Size> {
@@ -100,7 +100,7 @@ impl<W: Write> ratatui::backend::Backend for TermuxBackend<W> {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        ratatui::backend::Backend::flush(&mut self.inner)
+        ratatui::backend::Backend::flush(&mut self.inner).or_else(|_| Ok(()))
     }
 }
 
@@ -162,7 +162,7 @@ fn run_app<B: ratatui::backend::Backend>(
     state: &mut AppState,
 ) -> io::Result<()> {
     loop {
-        terminal.draw(|f| UI::draw(f, state))?;
+        let _ = terminal.draw(|f| UI::draw(f, state));
 
         if state.current_screen == Screen::Forging && state.is_processing {
             execute_forging_step(state);

@@ -45,6 +45,8 @@ esac
 DEST_DIR=""
 if [ "$IS_TERMUX" = true ]; then
     DEST_DIR="$PREFIX/bin"
+    # Remove any stale binary in ~/.local/bin to avoid PATH conflicts in Termux
+    rm -f "$HOME/.local/bin/lyric-forger" 2>/dev/null || true
 else
     DEST_DIR="$HOME/.local/bin"
     mkdir -p "$DEST_DIR"
