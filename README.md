@@ -13,6 +13,10 @@
 
 > **A high-performance, modern Rust TUI utility for Android (Termux) & Linux that smartly pairs ZIP archives of music files with `.lrc`/`.txt` lyrics and embeds them directly into audio file metadata.**
 
+[![Rust CI](https://github.com/AhooraZen/LyricForger-Rust/actions/workflows/ci.yml/badge.svg)](https://github.com/AhooraZen/LyricForger-Rust/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Platform: Termux / Android](https://img.shields.io/badge/Platform-Termux%20%7C%20Android-brightgreen.svg)]()
+
 ---
 
 ## 🇮🇷 راهنمای فارسی (Persian Documentation)
