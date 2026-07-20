@@ -19,11 +19,8 @@ jobs:
       matrix:
         include:
           - target: aarch64-linux-android
-            api_clang: aarch64-linux-android24-clang
           - target: armv7-linux-androideabi
-            api_clang: armv7a-linux-androideabi24-clang
           - target: x86_64-linux-android
-            api_clang: x86_64-linux-android24-clang
 
     steps:
       - name: Checkout Code
@@ -34,17 +31,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Build Standalone Android Executable Binary
-        run: |
-          NDK_BIN="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          CLANG_PATH="$NDK_BIN/${{ matrix.api_clang }}"
-          
-          TARGET_ENV=$(echo "${{ matrix.target }}" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
-          
-          export "CC_${TARGET_ENV}=$CLANG_PATH"
-          export "CARGO_TARGET_${TARGET_ENV}_LINKER=$CLANG_PATH"
+      - name: Install Cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
-          cargo build --target ${{ matrix.target }} --release
+      - name: Build Standalone Android Executable with Cross
+        run: cross build --target ${{ matrix.target }} --release
 
       - name: Prepare Binary Artifact
         run: |
