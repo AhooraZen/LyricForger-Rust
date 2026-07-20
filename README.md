@@ -73,9 +73,19 @@ cargo run --release
    - Combines **Jaro-Winkler**, **Sorensen-Dice**, and **Token Set Ratio** string distance algorithms.
    - Matches songs with slight typos or inverted artist/title order (e.g., `Coldplay - Viva La Vida.mp3` vs `Viva La Vida.lrc`).
 
+## 🚀 Quick Install & Auto-Updater
+
+Run this single command in Termux or Linux to automatically clone, compile, install, and add `lyric-forger` to your PATH:
+
+```bash
+git clone https://github.com/AhooraZen/LyricForger-Rust.git && cd LyricForger-Rust && ./install.sh
+```
+
+> **Tip:** Run `./install.sh` inside the folder anytime in the future to automatically update to the latest version!
+
 ---
 
-## 🚀 Installation
+## 🚀 Manual Installation Options
 
 ### Option A: Install in Termux (Android)
 
