@@ -102,6 +102,13 @@ cargo build --release
 ./target/release/lyric_forger
 ```
 
+### Option C: Download Pre-compiled Android Binaries (GitHub Actions)
+
+1. Go to the [Actions Tab on GitHub](https://github.com/AhooraZen/LyricForger-Rust/actions/workflows/build-android.yml).
+2. Select **Build Android Executable** from the workflows list on the left.
+3. Click the **Run workflow** button on the right.
+4. Once completed, download pre-compiled standalone Android binaries (`aarch64-linux-android`, `armv7-linux-androideabi`, `x86_64-linux-android`) directly from the build **Artifacts** section!
+
 ---
 
 ## 🎮 TUI Keybindings & Controls
