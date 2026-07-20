@@ -1,12 +1,15 @@
-name: Build Android Executable
+name: Build Android Binaries & Release
 
 on:
   workflow_dispatch:
     inputs:
-      release_build:
-        description: 'Build release binaries for Android'
+      tag_name:
+        description: 'Release Tag Name (e.g. v1.0.1)'
         required: false
-        default: 'true'
+        default: 'v1.0.0-android'
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   build-android:
@@ -42,13 +45,73 @@ jobs:
       - name: Build Android Binary with Cargo NDK
         run: cargo ndk -t ${{ matrix.arch }} -o ./dist build --release
 
-      - name: Prepare Artifact
+      - name: Prepare Binary Artifact
         run: |
-          mkdir -p ./artifacts
-          cp ./dist/${{ matrix.arch }}/lyric_forger ./artifacts/lyric_forger-${{ matrix.target }}
+          mkdir -p ./release_bins
+          cp ./dist/${{ matrix.arch }}/lyric_forger ./release_bins/lyric_forger-${{ matrix.target }}
 
       - name: Upload Binary Artifact
         uses: actions/upload-artifact@v4
         with:
           name: lyric_forger-${{ matrix.target }}
-          path: ./artifacts/lyric_forger-${{ matrix.target }}
+          path: ./release_bins/lyric_forger-${{ matrix.target }}
+
+  create-release:
+    name: Create GitHub Release & Attach Binaries
+    needs: build-android
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Create Source Archive
+        run: |
+          mkdir -p ./release_assets
+          tar --exclude='.git' --exclude='target' -czf ./release_assets/lyric-forger-rust-src.tar.gz .
+
+      - name: Download All Android Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./downloaded_artifacts
+
+      - name: Organize Release Binaries
+        run: |
+          cp ./downloaded_artifacts/lyric_forger-aarch64-linux-android/lyric_forger-aarch64-linux-android ./release_assets/
+          cp ./downloaded_artifacts/lyric_forger-armv7-linux-androideabi/lyric_forger-armv7-linux-androideabi ./release_assets/
+          cp ./downloaded_artifacts/lyric_forger-x86_64-linux-android/lyric_forger-x86_64-linux-android ./release_assets/
+          ls -la ./release_assets/
+
+      - name: Determine Release Tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag_name }}"
+          elif [ -n "${{ github.ref_name }}" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="v1.0.0-android"
+          fi
+          echo "TAG_NAME=$TAG" >> $GITHUB_ENV
+
+      - name: Publish Release to GitHub
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: "LyricForger-Rust Release (${{ env.TAG_NAME }}) ⚡"
+          body: |
+            ## ⚡ Pre-compiled Android Binaries & Source Archive
+
+            ### 📱 Android Executables Included:
+            - **`lyric_forger-aarch64-linux-android`**: ARM 64-bit (Termux & modern Android 64-bit devices)
+            - **`lyric_forger-armv7-linux-androideabi`**: ARM 32-bit (Older Android 10 / 32-bit devices)
+            - **`lyric_forger-x86_64-linux-android`**: x86_64 (Android emulators & x86 devices)
+
+            ### 📦 Source Code Archive:
+            - **`lyric-forger-rust-src.tar.gz`**: Bundled Rust source code.
+          files: |
+            ./release_assets/lyric_forger-aarch64-linux-android
+            ./release_assets/lyric_forger-armv7-linux-androideabi
+            ./release_assets/lyric_forger-x86_64-linux-android
+            ./release_assets/lyric-forger-rust-src.tar.gz
