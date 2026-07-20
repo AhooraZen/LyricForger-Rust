@@ -42,6 +42,7 @@ pub struct LyricFile {
     pub content: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct MatchResult {
     pub music_id: usize,
@@ -67,6 +68,33 @@ pub enum ActiveInput {
     Threshold,
 }
 
+#[derive(Debug, Clone)]
+pub struct FilePickerEntry {
+    pub name: String,
+    pub path: PathBuf,
+    pub is_dir: bool,
+    pub is_archive: bool,
+}
+
+pub struct FilePickerState {
+    pub current_dir: PathBuf,
+    pub entries: Vec<FilePickerEntry>,
+    pub selected_idx: usize,
+    pub target_input: ActiveInput,
+}
+
+impl Default for FilePickerState {
+    fn default() -> Self {
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+        Self {
+            current_dir,
+            entries: Vec::new(),
+            selected_idx: 0,
+            target_input: ActiveInput::MusicPath,
+        }
+    }
+}
+
 pub struct AppState {
     pub current_screen: Screen,
     pub active_input: ActiveInput,
@@ -76,6 +104,7 @@ pub struct AppState {
     pub lyrics_path_input: String,
     pub output_path_input: String,
     pub threshold: u32,
+    pub error_msg: Option<String>,
 
     // Data
     pub music_files: Vec<MusicFile>,
@@ -86,6 +115,8 @@ pub struct AppState {
     pub selected_match_idx: usize,
     pub filter_unmatched_only: bool,
     pub show_help_modal: bool,
+    pub show_file_picker: bool,
+    pub file_picker: FilePickerState,
 
     // Execution state
     pub is_processing: bool,
@@ -103,16 +134,19 @@ impl Default for AppState {
         Self {
             current_screen: Screen::Setup,
             active_input: ActiveInput::MusicPath,
-            music_path_input: String::from("music.zip"),
-            lyrics_path_input: String::from("lyrics.zip"),
+            music_path_input: String::new(),
+            lyrics_path_input: String::new(),
             output_path_input: String::from("output"),
             threshold: 50,
+            error_msg: None,
             music_files: Vec::new(),
             lyric_files: Vec::new(),
             matches: Vec::new(),
             selected_match_idx: 0,
             filter_unmatched_only: false,
             show_help_modal: false,
+            show_file_picker: false,
+            file_picker: FilePickerState::default(),
             is_processing: false,
             processed_count: 0,
             success_count: 0,

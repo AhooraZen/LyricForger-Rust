@@ -19,11 +19,10 @@ use zip::ZipArchive;
 
 use matcher::MatcherEngine;
 use tagger::TaggerEngine;
-use types::{ActiveInput, AppState, LyricFile, MusicFile, Screen};
+use types::{ActiveInput, AppState, FilePickerEntry, LyricFile, MusicFile, Screen};
 use ui::UI;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -32,7 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut state = AppState::default();
 
-    // Auto-detect sample zip files if they exist in cwd
+    // Auto-detect sample files in current directory or user home
     if Path::new("sample_music.zip").exists() {
         state.music_path_input = String::from("sample_music.zip");
     }
@@ -40,10 +39,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.lyrics_path_input = String::from("sample_lyrics.zip");
     }
 
-    // Run application loop
     let res = run_app(&mut terminal, &mut state);
 
-    // Restore terminal state
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -52,7 +49,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     terminal.show_cursor()?;
 
-    // Cleanup temp dir if created
     if let Some(ref temp_path) = state.temp_dir {
         let _ = fs::remove_dir_all(temp_path);
     }
@@ -82,36 +78,60 @@ fn run_app<B: ratatui::backend::Backend>(
 
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
-                // Toggle help modal globally
-                if key.code == KeyCode::Char('h') || key.code == KeyCode::Char('?') {
-                    state.show_help_modal = !state.show_help_modal;
+                // Global Ctrl+C handler
+                if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    return Ok(());
+                }
+
+                // If File Picker modal is open
+                if state.show_file_picker {
+                    handle_file_picker_input(key.code, state);
                     continue;
                 }
 
+                // If Help modal is open
                 if state.show_help_modal {
-                    if key.code == KeyCode::Esc || key.code == KeyCode::Char('h') {
+                    if key.code == KeyCode::Esc || key.code == KeyCode::F(1) {
                         state.show_help_modal = false;
                     }
                     continue;
                 }
 
+                // Check F1 to toggle help modal
+                if key.code == KeyCode::F(1) {
+                    state.show_help_modal = true;
+                    continue;
+                }
+
                 match state.current_screen {
-                    Screen::Setup => handle_setup_input(key.code, state),
+                    Screen::Setup => handle_setup_input(key.code, key.modifiers, state),
                     Screen::Analysis => handle_analysis_input(key.code, state),
                     Screen::Forging => {}
                     Screen::Summary => handle_summary_input(key.code, state),
-                }
-
-                // Global quit command: Ctrl+C
-                if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                    return Ok(());
                 }
             }
         }
     }
 }
 
-fn handle_setup_input(code: KeyCode, state: &mut AppState) {
+fn handle_setup_input(code: KeyCode, modifiers: KeyModifiers, state: &mut AppState) {
+    // Check Ctrl+P to open File Picker
+    if code == KeyCode::Char('p') && modifiers.contains(KeyModifiers::CONTROL) {
+        open_file_picker(state);
+        return;
+    }
+
+    // Check Ctrl+U to clear current text input
+    if code == KeyCode::Char('u') && modifiers.contains(KeyModifiers::CONTROL) {
+        match state.active_input {
+            ActiveInput::MusicPath => state.music_path_input.clear(),
+            ActiveInput::LyricsPath => state.lyrics_path_input.clear(),
+            ActiveInput::OutputPath => state.output_path_input.clear(),
+            ActiveInput::Threshold => state.threshold = 50,
+        }
+        return;
+    }
+
     match code {
         KeyCode::Esc => {
             std::process::exit(0);
@@ -133,6 +153,8 @@ fn handle_setup_input(code: KeyCode, state: &mut AppState) {
             };
         }
         KeyCode::Char(c) => {
+            // Typing input: ALWAYS append character to current text box!
+            state.error_msg = None;
             match state.active_input {
                 ActiveInput::MusicPath => state.music_path_input.push(c),
                 ActiveInput::LyricsPath => state.lyrics_path_input.push(c),
@@ -152,15 +174,14 @@ fn handle_setup_input(code: KeyCode, state: &mut AppState) {
                 ActiveInput::MusicPath => { state.music_path_input.pop(); }
                 ActiveInput::LyricsPath => { state.lyrics_path_input.pop(); }
                 ActiveInput::OutputPath => { state.output_path_input.pop(); }
-                ActiveInput::Threshold => {
-                    state.threshold /= 10;
-                }
+                ActiveInput::Threshold => { state.threshold /= 10; }
             }
         }
         KeyCode::Enter => {
-            // Perform Scan & Match
             if perform_scan_and_match(state) {
                 state.current_screen = Screen::Analysis;
+            } else {
+                state.error_msg = Some(String::from("No valid music tracks or archives found at specified path!"));
             }
         }
         _ => {}
@@ -186,7 +207,6 @@ fn handle_analysis_input(code: KeyCode, state: &mut AppState) {
             state.filter_unmatched_only = !state.filter_unmatched_only;
         }
         KeyCode::Enter => {
-            // Start Forging Process
             state.current_screen = Screen::Forging;
             state.is_processing = true;
             state.processed_count = 0;
@@ -208,6 +228,146 @@ fn handle_summary_input(code: KeyCode, state: &mut AppState) {
             std::process::exit(0);
         }
         _ => {}
+    }
+}
+
+fn open_file_picker(state: &mut AppState) {
+    state.file_picker.target_input = state.active_input.clone();
+    
+    // Set initial directory based on current input or cwd / android storage
+    let current_val = match state.active_input {
+        ActiveInput::MusicPath => &state.music_path_input,
+        ActiveInput::LyricsPath => &state.lyrics_path_input,
+        ActiveInput::OutputPath => &state.output_path_input,
+        ActiveInput::Threshold => "",
+    };
+
+    let path_val = Path::new(current_val);
+    if path_val.exists() {
+        if path_val.is_dir() {
+            state.file_picker.current_dir = path_val.to_path_buf();
+        } else if let Some(parent) = path_val.parent() {
+            state.file_picker.current_dir = parent.to_path_buf();
+        }
+    } else {
+        // Fallback to Termux storage or cwd
+        let termux_sd = Path::new("/storage/emulated/0");
+        if termux_sd.exists() {
+            state.file_picker.current_dir = termux_sd.to_path_buf();
+        } else if let Ok(cwd) = std::env::current_dir() {
+            state.file_picker.current_dir = cwd;
+        }
+    }
+
+    load_file_picker_entries(state);
+    state.show_file_picker = true;
+}
+
+fn load_file_picker_entries(state: &mut AppState) {
+    state.file_picker.entries.clear();
+    state.file_picker.selected_idx = 0;
+
+    let current_dir = state.file_picker.current_dir.clone();
+
+    // Add parent dir entry if not root
+    if let Some(parent) = current_dir.parent() {
+        state.file_picker.entries.push(FilePickerEntry {
+            name: String::from(".."),
+            path: parent.to_path_buf(),
+            is_dir: true,
+            is_archive: false,
+        });
+    }
+
+    if let Ok(read_dir) = fs::read_dir(&current_dir) {
+        let mut dirs = Vec::new();
+        let mut archives = Vec::new();
+
+        for entry_res in read_dir.flatten() {
+            let path = entry_res.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+
+            if name.starts_with('.') {
+                continue;
+            }
+
+            if path.is_dir() {
+                dirs.push(FilePickerEntry {
+                    name,
+                    path,
+                    is_dir: true,
+                    is_archive: false,
+                });
+            } else if path.is_file() {
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                let is_archive = ["zip", "rar", "7z", "tar", "gz"].contains(&ext.as_str());
+                let is_audio_lyric = ["mp3", "flac", "m4a", "ogg", "lrc", "txt"].contains(&ext.as_str());
+
+                // Filter logic: show archives & audio/lyric files, ignore non-relevant files
+                if is_archive || is_audio_lyric {
+                    archives.push(FilePickerEntry {
+                        name,
+                        path,
+                        is_dir: false,
+                        is_archive,
+                    });
+                }
+            }
+        }
+
+        dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        archives.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+        state.file_picker.entries.extend(dirs);
+        state.file_picker.entries.extend(archives);
+    }
+}
+
+fn handle_file_picker_input(code: KeyCode, state: &mut AppState) {
+    let entry_count = state.file_picker.entries.len();
+
+    match code {
+        KeyCode::Esc => {
+            state.show_file_picker = false;
+        }
+        KeyCode::Up => {
+            if state.file_picker.selected_idx > 0 {
+                state.file_picker.selected_idx -= 1;
+            }
+        }
+        KeyCode::Down => {
+            if entry_count > 0 && state.file_picker.selected_idx + 1 < entry_count {
+                state.file_picker.selected_idx += 1;
+            }
+        }
+        KeyCode::Char(' ') => {
+            // Select current directory as target input!
+            let dir_path = state.file_picker.current_dir.to_string_lossy().to_string();
+            apply_picker_selection(state, &dir_path);
+            state.show_file_picker = false;
+        }
+        KeyCode::Enter => {
+            if let Some(entry) = state.file_picker.entries.get(state.file_picker.selected_idx).cloned() {
+                if entry.is_dir {
+                    state.file_picker.current_dir = entry.path;
+                    load_file_picker_entries(state);
+                } else {
+                    let path_str = entry.path.to_string_lossy().to_string();
+                    apply_picker_selection(state, &path_str);
+                    state.show_file_picker = false;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn apply_picker_selection(state: &mut AppState, selected_path: &str) {
+    match state.file_picker.target_input {
+        ActiveInput::MusicPath => state.music_path_input = selected_path.to_string(),
+        ActiveInput::LyricsPath => state.lyrics_path_input = selected_path.to_string(),
+        ActiveInput::OutputPath => state.output_path_input = selected_path.to_string(),
+        ActiveInput::Threshold => {}
     }
 }
 
@@ -290,7 +450,8 @@ fn perform_scan_and_match(state: &mut AppState) -> bool {
 }
 
 fn process_input_target(input_path_str: &str, extract_dest: &Path) -> Option<PathBuf> {
-    let p = Path::new(input_path_str);
+    let clean_path = input_path_str.trim().trim_matches('\'').trim_matches('"');
+    let p = Path::new(clean_path);
     if !p.exists() {
         return None;
     }
@@ -299,31 +460,34 @@ fn process_input_target(input_path_str: &str, extract_dest: &Path) -> Option<Pat
         return Some(p.to_path_buf());
     }
 
-    if p.is_file() && p.extension().and_then(|e| e.to_str()) == Some("zip") {
-        if let Ok(file) = File::open(p) {
-            if let Ok(mut archive) = ZipArchive::new(file) {
-                let _ = fs::create_dir_all(extract_dest);
-                for i in 0..archive.len() {
-                    if let Ok(mut file) = archive.by_index(i) {
-                        let outpath = match file.enclosed_name() {
-                            Some(path) => extract_dest.join(path),
-                            None => continue,
-                        };
-                        if file.name().ends_with('/') {
-                            let _ = fs::create_dir_all(&outpath);
-                        } else {
-                            if let Some(p) = outpath.parent() {
-                                if !p.exists() {
-                                    let _ = fs::create_dir_all(p);
+    if p.is_file() {
+        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        if ext == "zip" {
+            if let Ok(file) = File::open(p) {
+                if let Ok(mut archive) = ZipArchive::new(file) {
+                    let _ = fs::create_dir_all(extract_dest);
+                    for i in 0..archive.len() {
+                        if let Ok(mut file) = archive.by_index(i) {
+                            let outpath = match file.enclosed_name() {
+                                Some(path) => extract_dest.join(path),
+                                None => continue,
+                            };
+                            if file.name().ends_with('/') {
+                                let _ = fs::create_dir_all(&outpath);
+                            } else {
+                                if let Some(p) = outpath.parent() {
+                                    if !p.exists() {
+                                        let _ = fs::create_dir_all(p);
+                                    }
                                 }
-                            }
-                            if let Ok(mut outfile) = File::create(&outpath) {
-                                let _ = io::copy(&mut file, &mut outfile);
+                                if let Ok(mut outfile) = File::create(&outpath) {
+                                    let _ = io::copy(&mut file, &mut outfile);
+                                }
                             }
                         }
                     }
+                    return Some(extract_dest.to_path_buf());
                 }
-                return Some(extract_dest.to_path_buf());
             }
         }
     }
