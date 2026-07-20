@@ -4,12 +4,12 @@ mod types;
 mod ui;
 
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -23,6 +23,13 @@ use types::{ActiveInput, AppState, FilePickerEntry, LyricFile, MusicFile, Screen
 use ui::UI;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Register panic hook to guarantee terminal raw mode & mouse tracking are restored even on unexpected errors
+    let default_panic = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        cleanup_terminal();
+        default_panic(panic_info);
+    }));
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -31,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut state = AppState::default();
 
-    // Auto-detect sample files in current directory or user home
+    // Auto-detect sample zip files if present
     if Path::new("sample_music.zip").exists() {
         state.music_path_input = String::from("sample_music.zip");
     }
@@ -41,13 +48,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let res = run_app(&mut terminal, &mut state);
 
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
+    // Always clean up terminal mode cleanly on normal exit
+    cleanup_terminal();
 
     if let Some(ref temp_path) = state.temp_dir {
         let _ = fs::remove_dir_all(temp_path);
@@ -58,6 +60,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+fn cleanup_terminal() {
+    let _ = disable_raw_mode();
+    let mut stdout = io::stdout();
+    let _ = execute!(
+        stdout,
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        crossterm::cursor::Show
+    );
+    let _ = stdout.flush();
 }
 
 fn run_app<B: ratatui::backend::Backend>(
@@ -77,51 +91,79 @@ fn run_app<B: ratatui::backend::Backend>(
         }
 
         if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                // Global Ctrl+C handler
-                if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                    return Ok(());
-                }
-
-                // If File Picker modal is open
-                if state.show_file_picker {
-                    handle_file_picker_input(key.code, state);
-                    continue;
-                }
-
-                // If Help modal is open
-                if state.show_help_modal {
-                    if key.code == KeyCode::Esc || key.code == KeyCode::F(1) {
-                        state.show_help_modal = false;
+            match event::read()? {
+                Event::Key(key) => {
+                    // Global Ctrl+C handler
+                    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                        return Ok(());
                     }
-                    continue;
+
+                    if state.show_file_picker {
+                        handle_file_picker_input(key.code, state);
+                        continue;
+                    }
+
+                    if state.show_help_modal {
+                        if key.code == KeyCode::Esc || key.code == KeyCode::F(1) {
+                            state.show_help_modal = false;
+                        }
+                        continue;
+                    }
+
+                    if key.code == KeyCode::F(1) {
+                        state.show_help_modal = true;
+                        continue;
+                    }
+
+                    let should_quit = match state.current_screen {
+                        Screen::Setup => handle_setup_input(key.code, key.modifiers, state),
+                        Screen::Analysis => handle_analysis_input(key.code, state),
+                        Screen::Forging => false,
+                        Screen::Summary => handle_summary_input(key.code, state),
+                    };
+
+                    if should_quit {
+                        return Ok(());
+                    }
                 }
 
-                // Check F1 to toggle help modal
-                if key.code == KeyCode::F(1) {
-                    state.show_help_modal = true;
-                    continue;
+                Event::Mouse(mouse) => {
+                    if mouse.kind == MouseEventKind::Down(crossterm::event::MouseButton::Left) {
+                        handle_mouse_click(mouse.column, mouse.row, state);
+                    }
                 }
 
-                match state.current_screen {
-                    Screen::Setup => handle_setup_input(key.code, key.modifiers, state),
-                    Screen::Analysis => handle_analysis_input(key.code, state),
-                    Screen::Forging => {}
-                    Screen::Summary => handle_summary_input(key.code, state),
-                }
+                _ => {}
             }
         }
     }
 }
 
-fn handle_setup_input(code: KeyCode, modifiers: KeyModifiers, state: &mut AppState) {
-    // Check Ctrl+P to open File Picker
-    if code == KeyCode::Char('p') && modifiers.contains(KeyModifiers::CONTROL) {
-        open_file_picker(state);
+fn handle_mouse_click(_col: u16, row: u16, state: &mut AppState) {
+    if state.show_file_picker || state.show_help_modal {
         return;
     }
 
-    // Check Ctrl+U to clear current text input
+    if state.current_screen == Screen::Setup {
+        // Map touch taps on Termux screen to input field focus & keyboard trigger!
+        if (3..=5).contains(&row) {
+            state.active_input = ActiveInput::MusicPath;
+        } else if (6..=8).contains(&row) {
+            state.active_input = ActiveInput::LyricsPath;
+        } else if (9..=10).contains(&row) {
+            state.active_input = ActiveInput::OutputPath;
+        } else if row >= 11 && row <= 12 {
+            state.active_input = ActiveInput::Threshold;
+        }
+    }
+}
+
+fn handle_setup_input(code: KeyCode, modifiers: KeyModifiers, state: &mut AppState) -> bool {
+    if code == KeyCode::Char('p') && modifiers.contains(KeyModifiers::CONTROL) {
+        open_file_picker(state);
+        return false;
+    }
+
     if code == KeyCode::Char('u') && modifiers.contains(KeyModifiers::CONTROL) {
         match state.active_input {
             ActiveInput::MusicPath => state.music_path_input.clear(),
@@ -129,12 +171,12 @@ fn handle_setup_input(code: KeyCode, modifiers: KeyModifiers, state: &mut AppSta
             ActiveInput::OutputPath => state.output_path_input.clear(),
             ActiveInput::Threshold => state.threshold = 50,
         }
-        return;
+        return false;
     }
 
     match code {
         KeyCode::Esc => {
-            std::process::exit(0);
+            return true; // Signal clean exit back to main()!
         }
         KeyCode::Tab => {
             state.active_input = match state.active_input {
@@ -153,7 +195,6 @@ fn handle_setup_input(code: KeyCode, modifiers: KeyModifiers, state: &mut AppSta
             };
         }
         KeyCode::Char(c) => {
-            // Typing input: ALWAYS append character to current text box!
             state.error_msg = None;
             match state.active_input {
                 ActiveInput::MusicPath => state.music_path_input.push(c),
@@ -186,9 +227,11 @@ fn handle_setup_input(code: KeyCode, modifiers: KeyModifiers, state: &mut AppSta
         }
         _ => {}
     }
+
+    false
 }
 
-fn handle_analysis_input(code: KeyCode, state: &mut AppState) {
+fn handle_analysis_input(code: KeyCode, state: &mut AppState) -> bool {
     match code {
         KeyCode::Esc => {
             state.current_screen = Screen::Setup;
@@ -217,24 +260,23 @@ fn handle_analysis_input(code: KeyCode, state: &mut AppState) {
         }
         _ => {}
     }
+    false
 }
 
-fn handle_summary_input(code: KeyCode, state: &mut AppState) {
+fn handle_summary_input(code: KeyCode, state: &mut AppState) -> bool {
     match code {
         KeyCode::Enter => {
             state.current_screen = Screen::Setup;
+            false
         }
-        KeyCode::Esc => {
-            std::process::exit(0);
-        }
-        _ => {}
+        KeyCode::Esc => true,
+        _ => false,
     }
 }
 
 fn open_file_picker(state: &mut AppState) {
     state.file_picker.target_input = state.active_input.clone();
     
-    // Set initial directory based on current input or cwd / android storage
     let current_val = match state.active_input {
         ActiveInput::MusicPath => &state.music_path_input,
         ActiveInput::LyricsPath => &state.lyrics_path_input,
@@ -250,7 +292,6 @@ fn open_file_picker(state: &mut AppState) {
             state.file_picker.current_dir = parent.to_path_buf();
         }
     } else {
-        // Fallback to Termux storage or cwd
         let termux_sd = Path::new("/storage/emulated/0");
         if termux_sd.exists() {
             state.file_picker.current_dir = termux_sd.to_path_buf();
@@ -269,7 +310,6 @@ fn load_file_picker_entries(state: &mut AppState) {
 
     let current_dir = state.file_picker.current_dir.clone();
 
-    // Add parent dir entry if not root
     if let Some(parent) = current_dir.parent() {
         state.file_picker.entries.push(FilePickerEntry {
             name: String::from(".."),
@@ -303,7 +343,6 @@ fn load_file_picker_entries(state: &mut AppState) {
                 let is_archive = ["zip", "rar", "7z", "tar", "gz"].contains(&ext.as_str());
                 let is_audio_lyric = ["mp3", "flac", "m4a", "ogg", "lrc", "txt"].contains(&ext.as_str());
 
-                // Filter logic: show archives & audio/lyric files, ignore non-relevant files
                 if is_archive || is_audio_lyric {
                     archives.push(FilePickerEntry {
                         name,
@@ -341,7 +380,6 @@ fn handle_file_picker_input(code: KeyCode, state: &mut AppState) {
             }
         }
         KeyCode::Char(' ') => {
-            // Select current directory as target input!
             let dir_path = state.file_picker.current_dir.to_string_lossy().to_string();
             apply_picker_selection(state, &dir_path);
             state.show_file_picker = false;

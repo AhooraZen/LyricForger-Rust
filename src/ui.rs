@@ -16,7 +16,6 @@ impl UI {
     pub fn draw(f: &mut Frame, state: &AppState) {
         let area = f.area();
 
-        // Ensure minimal area sanity check
         if area.width < 10 || area.height < 5 {
             let p = Paragraph::new("Terminal too small! Please enlarge.").alignment(Alignment::Center);
             f.render_widget(p, area);
@@ -102,8 +101,8 @@ impl UI {
 
     fn draw_footer(f: &mut Frame, state: &AppState, area: Rect) {
         let hints = match state.current_screen {
-            Screen::Setup => " [Tab] Next Field  [Ctrl+P] Browse Files  [Enter] Start Scan  [F1] Help  [Esc] Quit ",
-            Screen::Analysis => " [↑/↓] Select Pair  [Space] Filter Unmatched  [Enter] FORGE  [Esc] Back ",
+            Screen::Setup => " [Tap Input/Tab] Focus  [Ctrl+P] Browse Files  [Enter] Start Scan  [F1] Help  [Esc] Quit ",
+            Screen::Analysis => " [Tap/Arrows] Select Pair  [Space] Filter Unmatched  [Enter] FORGE  [Esc] Back ",
             Screen::Forging => " ⚡ Forging lyrics into audio metadata... Please wait ",
             Screen::Summary => " [Enter] New Scan Job  [Esc] Exit ",
         };
@@ -115,7 +114,6 @@ impl UI {
     }
 
     fn draw_setup_screen(f: &mut Frame, state: &AppState, area: Rect) {
-        // Use flexible proportions for responsiveness on small screens
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -143,11 +141,11 @@ impl UI {
         let output_style = if state.active_input == ActiveInput::OutputPath { active_style } else { inactive_style };
         let thresh_style = if state.active_input == ActiveInput::Threshold { active_style } else { inactive_style };
 
-        let m_str = if state.music_path_input.is_empty() { "(Empty - Press Ctrl+P to browse zip/folder)" } else { &state.music_path_input };
-        let l_str = if state.lyrics_path_input.is_empty() { "(Empty - Press Ctrl+P to browse zip/folder)" } else { &state.lyrics_path_input };
+        let m_str = if state.music_path_input.is_empty() { "(Tap or press Ctrl+P to browse zip/folder)" } else { &state.music_path_input };
+        let l_str = if state.lyrics_path_input.is_empty() { "(Tap or press Ctrl+P to browse zip/folder)" } else { &state.lyrics_path_input };
 
-        let p_music = Paragraph::new(format!(" 🎵 Music ZIP / Folder:  {}\n   [Ctrl+P to browse archive/folder]", m_str)).style(music_style);
-        let p_lyrics = Paragraph::new(format!(" 📄 Lyrics ZIP / Folder: {}\n   [Ctrl+P to browse archive/folder]", l_str)).style(lyrics_style);
+        let p_music = Paragraph::new(format!(" 🎵 Music ZIP / Folder:  {}\n   [Tap to type / Ctrl+P to browse]", m_str)).style(music_style);
+        let p_lyrics = Paragraph::new(format!(" 📄 Lyrics ZIP / Folder: {}\n   [Tap to type / Ctrl+P to browse]", l_str)).style(lyrics_style);
         let p_output = Paragraph::new(format!(" 📁 Output Folder:      {}", state.output_path_input)).style(output_style);
         let p_thresh = Paragraph::new(format!(" 🎯 Match Threshold (%): {}%", state.threshold)).style(thresh_style);
 
@@ -156,14 +154,39 @@ impl UI {
         f.render_widget(p_output, input_chunks[2]);
         f.render_widget(p_thresh, input_chunks[3]);
 
+        // Position terminal cursor on active text box so Termux opens the touch keyboard!
+        if !state.show_file_picker && !state.show_help_modal {
+            let active_rect = match state.active_input {
+                ActiveInput::MusicPath => input_chunks[0],
+                ActiveInput::LyricsPath => input_chunks[1],
+                ActiveInput::OutputPath => input_chunks[2],
+                ActiveInput::Threshold => input_chunks[3],
+            };
+
+            let text_len = match state.active_input {
+                ActiveInput::MusicPath => state.music_path_input.chars().count(),
+                ActiveInput::LyricsPath => state.lyrics_path_input.chars().count(),
+                ActiveInput::OutputPath => state.output_path_input.chars().count(),
+                ActiveInput::Threshold => state.threshold.to_string().chars().count(),
+            };
+
+            let cursor_x = std::cmp::min(
+                active_rect.x + 25 + text_len as u16,
+                active_rect.x + active_rect.width.saturating_sub(2),
+            );
+            let cursor_y = active_rect.y;
+
+            f.set_cursor_position((cursor_x, cursor_y));
+        }
+
         let mut info_text = vec![
             Line::from(Span::styled("✨ 3 Smart Matching Strategies Enabled:", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
             Line::from("  1. 🎯 Exact Clean: Strips track #, release noise, brackets & punctuation."),
             Line::from("  2. 🏷️ Metadata Header: Compares ID3/Vorbis tags with [ti:] & [ar:] LRC headers."),
             Line::from("  3. 🔤 Fuzzy Distance: Levenshtein & Token ratio for minor spelling differences."),
             Line::from(""),
-            Line::from(Span::styled("📱 Samsung Music Spec Support:", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
-            Line::from("  • MP3 USLT ID3v2 frames & FLAC Vorbis LYRICS comments."),
+            Line::from(Span::styled("📱 Termux Keyboard Hint:", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
+            Line::from("  • Tap on any input box above to focus and trigger your touch keyboard!"),
         ];
 
         if let Some(ref err) = state.error_msg {
@@ -427,10 +450,10 @@ impl UI {
 
     fn draw_help_modal(f: &mut Frame, area: Rect) {
         let popup_area = Rect {
-            x: area.width / 8,
-            y: area.height / 8,
-            width: (area.width * 3) / 4,
-            height: (area.height * 3) / 4,
+            x: area.width / 10,
+            y: area.height / 10,
+            width: (area.width * 4) / 5,
+            height: (area.height * 4) / 5,
         };
 
         f.render_widget(Clear, popup_area);
@@ -438,8 +461,9 @@ impl UI {
         let help_text = vec![
             Line::from(Span::styled("⚡ LYRIC FORGER HELP & KEYBINDINGS", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
             Line::from(""),
-            Line::from(Span::styled("Controls:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-            Line::from("  • Tab           : Cycle input fields"),
+            Line::from(Span::styled("Controls & Touch:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+            Line::from("  • Tap Screen    : Focus input text box & open Termux keyboard!"),
+            Line::from("  • Tab / BackTab : Cycle input fields"),
             Line::from("  • Ctrl+P        : Open Archive & Folder Picker Browser"),
             Line::from("  • Ctrl+U        : Clear current text field"),
             Line::from("  • ↑ / ↓ Arrows  : Scroll match table / navigate file picker"),
